@@ -1,0 +1,70 @@
+# 全局开发规则
+
+对于 Python 项目，遵循以下规则。若项目内更深层级的 `AGENTS.md` 有更具体或冲突的要求，以项目规则为准。
+
+## 编程原则
+
+- 遵循 Python 之禅，优先选择简单、清晰、直接的实现。
+- 让错误自然发生并向上抛出，不要为了“安全”堆叠不必要的事前检查、宽泛异常捕获或静默降级。
+- 在边界处进行必要的输入验证和类型检查；不要用防御性代码掩盖真正的程序错误。
+
+## 脚本执行方式
+
+- 如无明确要求，Python 脚本不要实现为 CLI，不使用 `argparse`、Typer、Click 等命令行参数框架。
+- 默认将可调整参数集中写在脚本顶部，通过 `main()` 和 `if __name__ == "__main__":` 直接运行。
+
+## 日志
+
+- 如需日志记录，优先使用 `loguru`，不使用标准库 `logging`。
+- 成功日志使用绿色显示。
+- 警告和错误日志使用红色显示。
+
+## 路径管理
+
+- 使用 `pathlib.Path` 管理文件系统路径，不使用 `os.path`。
+- 只有在 `pathlib` 无法满足需求时，才使用 `os` 中与路径无关的能力。
+
+## Polars
+
+### 日期筛选
+
+- 使用 Pandas 解析外部日期输入，再根据 Polars 列的实际类型构造边界值。
+- 日期列为 `pl.Date` 时，将边界转换为 Python `date`；日期列为 `pl.Datetime` 时，保留 Python `datetime`。
+
+```python
+import pandas as pd
+import polars as pl
+
+start_date = pd.to_datetime("2025-01-01").date()
+end_date = pd.to_datetime("20251231").date()
+
+df = pl.read_csv(...)
+df = df.filter(
+    pl.col("date").is_between(
+        pl.lit(start_date),
+        pl.lit(end_date),
+        closed="both",
+    )
+)
+```
+
+### 惰性计算
+
+- 优先使用 `LazyFrame`。
+- 尽可能推迟 `collect()`，让筛选、连接、聚合和列裁剪保持在惰性执行计划中，以便 Polars 优化查询。
+- 仅在确实需要物化结果、调用不支持惰性执行的接口或输出最终结果时执行 `collect()`。
+
+## 代码格式
+
+- Python 代码遵循 Black 的格式规范。
+- Python 文件修改后的 Black 格式化由全局 `PostToolUse` hook 自动执行。
+- Black 由 Conda 的 `base` 环境提供，项目开发环境无需安装 Black。
+- hook 只格式化本次修改涉及的 `.py` 文件，不无故格式化整个项目。
+- 不为迎合手工排版而编写与 Black 冲突的格式。
+
+## 注释和文档字符串
+
+- 每个非平凡的函数和类都应有简洁、准确的文档字符串；简单、含义显然的内部辅助函数可不写。
+- 对代码按功能块添加少量引导性注释，解释意图、约束或不明显的原因。
+- 不要为简单逻辑添加高密度逐行注释，也不要用注释复述代码。
+- 修改代码时，同步更新涉及的注释和文档字符串，删除已经过时或与实现不符的内容。

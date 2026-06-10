@@ -1,0 +1,4 @@
+interface:
+  display_name: "Ricequant SDK"
+  short_description: "米筐 RQSDK 数据、回测、因子与组合优化开发指南"
+  default_prompt: "使用 $ricequant-sdk 根据米筐官方文档完成这项量化开发任务。"

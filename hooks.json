@@ -1,0 +1,16 @@
+{
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "^apply_patch$",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/opt/miniconda3/bin/python /home/zhhchen/.codex/hooks/black_after_edit.py",
+            "statusMessage": "Formatting changed Python files with Black"
+          }
+        ]
+      }
+    ]
+  }
+}
