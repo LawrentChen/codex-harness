@@ -19,6 +19,7 @@
 
 - 如无明确要求，Python 脚本不要实现为 CLI，不使用 `argparse`、Typer、Click 等命令行参数框架。
 - 默认将可调整参数集中写在脚本顶部，通过 `main()` 和 `if __name__ == "__main__":` 直接运行。
+- 默认用户会在项目根目录执行脚本；除非确有必要，不要为了兼容导入而添加 `sys.path.insert(0, str(Path(__file__).resolve().parents[1]))`。
 
 ## 日志
 
