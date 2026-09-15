@@ -1,0 +1,7 @@
+interface:
+  display_name: "总控面"
+  short_description: "按自然人用户明确要求维护任务卡、自动进度总览与跨任务交接"
+  default_prompt: "使用 $coordination，通过总控面接手当前工作并维护任务卡。"
+
+policy:
+  allow_implicit_invocation: false

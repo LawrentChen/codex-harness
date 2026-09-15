@@ -10,6 +10,16 @@
             "statusMessage": "Formatting changed Python files with Black"
           }
         ]
+      },
+      {
+        "matcher": "^apply_patch$",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/opt/miniconda3/bin/python /home/zhhchen/.codex/hooks/coordination_after_edit.py",
+            "timeout": 10
+          }
+        ]
       }
     ]
   }
