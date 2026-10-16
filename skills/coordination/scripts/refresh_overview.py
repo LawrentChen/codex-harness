@@ -1,4 +1,4 @@
-"""Generate global and project progress views from control task cards."""
+"""Generate global and project progress and archive views from task cards."""
 
 from dataclasses import dataclass
 from datetime import datetime
@@ -31,6 +31,7 @@ class Card:
     next_step: str
     depends_on: tuple[str, ...]
     parent: str | None
+    closed_at: datetime | None = None
 
 
 def is_card_path(path: Path, root: Path = ROOT) -> bool:
@@ -66,6 +67,14 @@ def text_field(metadata: dict, field: str, default: str | None = None) -> str:
     if not isinstance(value, str):
         raise ValueError(f"{field} 必须是文本")
     return value
+
+
+def timestamp(value: object, label: str) -> datetime:
+    """Validate a required timezone-aware timestamp at the metadata boundary."""
+    parsed = datetime.fromisoformat(value) if isinstance(value, str) else value
+    if not isinstance(parsed, datetime) or parsed.utcoffset() is None:
+        raise ValueError(f"{label} 必须是带时区的 ISO 时间")
+    return parsed
 
 
 def read_card(path: Path, root: Path) -> Card:
@@ -109,10 +118,9 @@ def read_card(path: Path, root: Path) -> Card:
     if relative.parts[0] == "projects" and relative.parts[1] not in repos:
         raise ValueError(f"repos 必须包含任务卡所在项目：{path}")
 
-    value = metadata.get("updated_at")
-    updated_at = datetime.fromisoformat(value) if isinstance(value, str) else value
-    if not isinstance(updated_at, datetime) or updated_at.utcoffset() is None:
-        raise ValueError(f"updated_at 必须是带时区的 ISO 时间：{path}")
+    updated_at = timestamp(metadata.get("updated_at"), f"updated_at：{path}")
+    value = metadata.get("closed_at")
+    closed_at = timestamp(value, f"closed_at：{path}") if value is not None else None
     dependencies = metadata.get("depends_on", [])
     if not isinstance(dependencies, list):
         raise ValueError(f"depends_on 必须是 ID 列表：{path}")
@@ -131,6 +139,7 @@ def read_card(path: Path, root: Path) -> Card:
         text_field(metadata, "next_step", ""),
         dependencies,
         parent,
+        closed_at,
     )
 
 
@@ -166,12 +175,14 @@ def render(
         "",
         "自动生成，请修改任务卡。这里显示各任务最后记录的状态，不代表实时运行或自动验收。",
         "",
-        f"活跃 {len(active)} 项；已完成 {sum(c.status == 'done' for c in cards)} 项；"
-        f"已取消 {sum(c.status == 'cancelled' for c in cards)} 项。结束项详情保留在原卡。",
+        f"未完成 {len(active)} 项；已完成 {sum(c.status == 'done' for c in cards)} 项；"
+        f"已取消 {sum(c.status == 'cancelled' for c in cards)} 项。",
+        "",
+        "[查看已完成与已取消事项](ARCHIVE.md)",
         "",
     ]
     if not active:
-        lines.append("暂无活跃工作项。")
+        lines.append("暂无未完成工作项。")
     else:
         lines.extend(
             [
@@ -210,6 +221,54 @@ def render(
                 "<br>".join(dependencies) or "—",
                 cell(card.next_step) or "—",
                 card.updated_at.isoformat(timespec="seconds"),
+            ]
+            lines.append("| " + " | ".join(values) + " |")
+    return "\n".join(lines) + "\n"
+
+
+def render_archive(cards: list[Card], output: Path, title: str) -> str:
+    """List closed work by recorded closure time, keeping all source cards in place."""
+    lines = [
+        MARKER,
+        f"# {title}",
+        "",
+        "自动生成，请修改任务卡。完整交付、决定和验证证据保留在原卡，卡片路径不变。",
+        "",
+        "[查看未完成事项](OVERVIEW.md)",
+        "",
+        f"已完成 {sum(c.status == 'done' for c in cards)} 项；"
+        f"已取消 {sum(c.status == 'cancelled' for c in cards)} 项。",
+        "各组按结束时间倒序排列；未记录结束时间的事项列在组末，不以最后更新时间代替。",
+    ]
+    for status, heading in (("done", "已完成"), ("cancelled", "已取消")):
+        closed = sorted(
+            (card for card in cards if card.status == status),
+            key=lambda card: (
+                card.closed_at is None,
+                -card.closed_at.timestamp() if card.closed_at is not None else 0,
+                card.id,
+            ),
+        )
+        lines.extend(["", f"## {heading}", ""])
+        if not closed:
+            lines.append(f"暂无{heading}工作项。")
+            continue
+        lines.extend(
+            [
+                "| 结束时间 | 工作项 | 状态 | 项目 |",
+                "| --- | --- | --- | --- |",
+            ]
+        )
+        for card in closed:
+            values = [
+                (
+                    card.closed_at.isoformat(timespec="seconds")
+                    if card.closed_at is not None
+                    else "未记录"
+                ),
+                f"[{cell(card.id)} · {cell(card.title)}]({relative_link(card.path, output)})",
+                card.status,
+                cell(", ".join(card.repos)),
             ]
             lines.append("| " + " | ".join(values) + " |")
     return "\n".join(lines) + "\n"
@@ -267,14 +326,26 @@ def refresh(root: Path = ROOT) -> list[Path]:
             for project in projects:
                 target = root / "projects" / project / "OVERVIEW.md"
                 content += f"- [{cell(project)}]({relative_link(target, output)})\n"
-        views = {output: content}
+        archive = root / "ARCHIVE.md"
+        archived = render_archive(cards, archive, "总控面 · 全局归档")
+        if projects:
+            archived += "\n## 项目归档\n\n"
+            for project in projects:
+                target = root / "projects" / project / "ARCHIVE.md"
+                archived += f"- [{cell(project)}]({relative_link(target, archive)})\n"
+        views = {output: content, archive: archived}
         for project in projects:
+            project_cards = [card for card in cards if project in card.repos]
             output = root / "projects" / project / "OVERVIEW.md"
             views[output] = render(
-                [card for card in cards if project in card.repos],
+                project_cards,
                 all_cards,
                 output,
                 f"总控面 · {project}",
+            )
+            archive = output.with_name("ARCHIVE.md")
+            views[archive] = render_archive(
+                project_cards, archive, f"总控面 · {project} · 归档"
             )
         # Validate all destinations before publishing any view.
         for path in views:

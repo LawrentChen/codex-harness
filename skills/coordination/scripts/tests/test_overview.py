@@ -66,7 +66,7 @@ class OverviewTests(unittest.TestCase):
         path = self.card(location="projects/alpha/tasks/field.md")
         before = path.read_bytes()
         changed = overview.refresh(self.root)
-        self.assertEqual(len(changed), 3)
+        self.assertEqual(len(changed), 6)
         for project in ("alpha", "beta"):
             text = (self.root / "projects" / project / "OVERVIEW.md").read_text()
             self.assertIn("统一字段", text)
@@ -81,6 +81,7 @@ class OverviewTests(unittest.TestCase):
             self.event("*** Update File: /home/project/app.py"),
             self.event("*** Update File: docs/TODO.md\n+使用 _control"),
             self.event("*** Update File: OVERVIEW.md"),
+            self.event("*** Update File: ARCHIVE.md"),
             self.event("*** Update File: CURRENT.md"),
             self.event("*** Update File: /somewhere/_control/tasks/x.md"),
             self.event("*** Update File: tasks/x.md", tool_name="Bash"),
@@ -97,6 +98,7 @@ class OverviewTests(unittest.TestCase):
             hook.handle(self.event("*** Update File: tasks/field.md"), self.root)
         self.assertEqual(output.getvalue(), "")
         self.assertTrue((self.root / "OVERVIEW.md").is_file())
+        self.assertTrue((self.root / "ARCHIVE.md").is_file())
         self.assertIn("统一字段", (self.root / "OVERVIEW.md").read_text())
 
     def test_absolute_patch_from_other_repository(self):
@@ -112,14 +114,14 @@ class OverviewTests(unittest.TestCase):
         overview.refresh(self.root)
         path.unlink()
         hook.handle(self.event("*** Delete File: tasks/field.md"), self.root)
-        self.assertIn("活跃 0 项", (self.root / "OVERVIEW.md").read_text())
+        self.assertIn("未完成 0 项", (self.root / "OVERVIEW.md").read_text())
         self.assertIn(
-            "活跃 0 项", (self.root / "projects/alpha/OVERVIEW.md").read_text()
+            "未完成 0 项", (self.root / "projects/alpha/OVERVIEW.md").read_text()
         )
         self.card()
         event = self.event("*** Update File: incoming.md\n*** Move to: tasks/field.md")
         hook.handle(event, self.root)
-        self.assertIn("活跃 1 项", (self.root / "OVERVIEW.md").read_text())
+        self.assertIn("未完成 1 项", (self.root / "OVERVIEW.md").read_text())
 
     def test_repeated_refresh_does_not_rewrite_unchanged_views(self):
         self.card()
@@ -149,7 +151,7 @@ class OverviewTests(unittest.TestCase):
         self.card("child", status="done", parent="parent")
         overview.refresh(self.root)
         text = (self.root / "OVERVIEW.md").read_text()
-        self.assertIn("活跃 1 项；已完成 1 项", text)
+        self.assertIn("未完成 1 项；已完成 1 项", text)
         self.assertIn("| doing |", text)
         self.assertEqual(overview.read_card(parent, self.root).status, "doing")
 
@@ -182,6 +184,10 @@ class OverviewTests(unittest.TestCase):
     def test_parallel_refreshes_leave_complete_views(self):
         for index in range(12):
             self.card(f"task-{index}")
+        self.card("finished", status="done", closed_at="2026-09-18T09:00:00+08:00")
+        self.card(
+            "abandoned", status="cancelled", closed_at="2026-09-18T10:00:00+08:00"
+        )
         scripts = Path(overview.__file__).parent
         command = [
             sys.executable,
@@ -201,9 +207,18 @@ class OverviewTests(unittest.TestCase):
             self.root / "projects/beta/OVERVIEW.md",
         ]:
             text = path.read_text()
-            self.assertIn("活跃 12 项", text)
+            self.assertIn("未完成 12 项", text)
             for index in range(12):
                 self.assertIn(f"task-{index}", text)
+        for directory in (
+            self.root,
+            self.root / "projects/alpha",
+            self.root / "projects/beta",
+        ):
+            archive = (directory / "ARCHIVE.md").read_text()
+            self.assertIn("已完成 1 项；已取消 1 项", archive)
+            self.assertIn("[finished", archive)
+            self.assertIn("[abandoned", archive)
         self.assertEqual(list(self.root.rglob(".overview-*")), [])
         self.assertEqual(overview.refresh(self.root), [])
 
@@ -218,6 +233,112 @@ class OverviewTests(unittest.TestCase):
         self.assertIn("可能未更新", result["systemMessage"])
         self.assertNotIn("continue", result)
         self.assertNotIn("decision", result)
+
+    def test_archive_groups_closed_cards_and_preserves_paths(self):
+        finished = self.card(
+            "finished",
+            location="projects/alpha/tasks/finished.md",
+            status="done",
+            closed_at="2026-09-18T10:00:00+08:00",
+        )
+        abandoned = self.card(
+            "abandoned", status="cancelled", closed_at="2026-09-17T12:00:00+08:00"
+        )
+        active = self.card("active")
+        original = {path: path.read_bytes() for path in (finished, abandoned, active)}
+        hook.handle(
+            self.event(f"*** Update File: {finished}"),
+            self.root,
+        )
+        current = (self.root / "OVERVIEW.md").read_text()
+        self.assertIn("[active", current)
+        self.assertNotIn("[finished", current)
+        self.assertNotIn("[abandoned", current)
+        self.assertIn("(ARCHIVE.md)", current)
+        for directory in (
+            self.root,
+            self.root / "projects/alpha",
+            self.root / "projects/beta",
+        ):
+            archive = (directory / "ARCHIVE.md").read_text()
+            done = archive.split("## 已完成\n", 1)[1].split("## 已取消\n", 1)[0]
+            cancelled = archive.split("## 已取消\n", 1)[1]
+            self.assertIn("[finished", done)
+            self.assertNotIn("[abandoned", done)
+            self.assertIn("[abandoned", cancelled)
+            self.assertNotIn("[finished", cancelled)
+            self.assertNotIn("[active", archive)
+            self.assertIn("(OVERVIEW.md)", archive)
+        beta = (self.root / "projects/beta/ARCHIVE.md").read_text()
+        self.assertIn("../alpha/tasks/finished.md", beta)
+        self.assertEqual(original, {path: path.read_bytes() for path in original})
+
+    def test_archive_orders_by_closed_at_and_keeps_unknown_times_last(self):
+        self.card(
+            "a-earlier",
+            status="done",
+            closed_at="2026-09-18T10:30:00+08:00",
+            updated_at="2026-09-21T12:00:00+08:00",
+        )
+        self.card("z-later", status="done", closed_at="2026-09-18T03:00:00+00:00")
+        self.card("0-legacy", status="done", updated_at="2026-09-20T12:00:00+08:00")
+        self.card("null-time", status="done", closed_at=None)
+        overview.refresh(self.root)
+        archive = (self.root / "ARCHIVE.md").read_text()
+        self.assertLess(archive.index("[z-later"), archive.index("[a-earlier"))
+        self.assertLess(archive.index("[a-earlier"), archive.index("[0-legacy"))
+        self.assertIn("| 未记录 | [0-legacy", archive)
+        self.assertIn("| 未记录 | [null-time", archive)
+        self.assertNotIn("2026-09-20", archive)
+        self.assertNotIn("2026-09-21", archive)
+        self.card(
+            "a-earlier",
+            status="done",
+            closed_at="2026-09-18T10:30:00+08:00",
+            updated_at="2026-09-22T12:00:00+08:00",
+        )
+        self.assertEqual(overview.refresh(self.root), [])
+        self.assertEqual((self.root / "ARCHIVE.md").read_text(), archive)
+
+    def test_reopened_card_returns_to_overview_at_same_path(self):
+        path = self.card(
+            "reopened", status="done", closed_at="2026-09-18T09:00:00+08:00"
+        )
+        event = self.event(f"*** Update File: {path}")
+        hook.handle(event, self.root)
+        self.assertIn("[reopened", (self.root / "ARCHIVE.md").read_text())
+        self.assertEqual(self.card("reopened", status="doing", closed_at=None), path)
+        hook.handle(event, self.root)
+        for directory in (
+            self.root,
+            self.root / "projects/alpha",
+            self.root / "projects/beta",
+        ):
+            self.assertIn("[reopened", (directory / "OVERVIEW.md").read_text())
+            self.assertNotIn("[reopened", (directory / "ARCHIVE.md").read_text())
+        self.assertTrue(path.is_file())
+
+    def test_invalid_closed_at_preserves_all_views(self):
+        self.card("finished", status="done", closed_at="2026-09-18T09:00:00+08:00")
+        paths = overview.refresh(self.root)
+        previous = {path: path.read_bytes() for path in paths}
+        for value in ("2026-09-18", "2026-09-18T09:00:00", "not-a-time", 0):
+            with self.subTest(closed_at=value):
+                self.card("invalid", status="done", closed_at=value)
+                with self.assertRaises(ValueError):
+                    overview.refresh(self.root)
+                self.assertEqual(previous, {path: path.read_bytes() for path in paths})
+
+    def test_unowned_archive_prevents_partial_publication(self):
+        self.card()
+        paths = overview.refresh(self.root)
+        archive = self.root / "projects/beta/ARCHIVE.md"
+        archive.write_text("自然人用户的归档")
+        previous = {path: path.read_bytes() for path in paths}
+        self.card(title="修改后的标题")
+        with self.assertRaisesRegex(ValueError, "非生成文件"):
+            overview.refresh(self.root)
+        self.assertEqual(previous, {path: path.read_bytes() for path in paths})
 
     def test_absent_root_is_not_initialized_by_refresh(self):
         missing = self.root / "absent"

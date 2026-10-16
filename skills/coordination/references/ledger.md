@@ -6,16 +6,19 @@
 
 ```text
 _control/
-├── OVERVIEW.md                 # 自动生成的全局进度
+├── OVERVIEW.md                 # 自动生成的全局未完成事项
+├── ARCHIVE.md                  # 自动生成的全局已完成、已取消事项
 ├── CURRENT.md                  # 按需：重点和约定
 ├── tasks/<id>.md               # 首次登记即跨项目的工作
 └── projects/<project-key>/
-    ├── OVERVIEW.md             # 自动生成，包含涉及该项目的跨仓卡片
+    ├── OVERVIEW.md             # 自动生成，包含涉及该项目的未完成跨仓卡片
+    ├── ARCHIVE.md              # 自动生成，包含涉及该项目的已结束跨仓卡片
     ├── CURRENT.md              # 按需：项目重点和约定
     └── tasks/<id>.md           # 首次登记为单项目的工作
 ```
 
 需要时再建目录。单项目事项后来跨仓，保留原 ID 和路径，只更新 repos。
+完成、取消或重新打开时也保持卡片原路径；ARCHIVE.md 是索引，不搬移或复制卡片。
 通过实际仓库和 Git common-dir 判断 worktree 的项目身份，不将每个 worktree 当成新项目。
 
 ID 使用稳定短名，可带时间戳，必须与文件名（不含 .md）一致且全局唯一。
@@ -34,6 +37,7 @@ status: deferred
 owner: null
 repos: [filedb_dev, filedb_datac, prefect, data-health-dashboard]
 updated_at: "2026-09-15T14:30:00+08:00"
+closed_at: null
 next_step: "确定字段含义与消费范围"
 depends_on: []
 parent: null
@@ -67,7 +71,8 @@ parent: null
 ```
 
 头部必填：id、title、status、owner（可为 null）、repos（非空项目键列表）、
-updated_at（带时区的 ISO 时间）。next_step、depends_on、parent 可省略。
+updated_at（带时区的 ISO 时间）。closed_at、next_step、depends_on、parent 可省略。
+closed_at 非空时也必须是带时区的 ISO 时间。
 时间和可能含特殊字符的文本用引号；不要在字段内放长日志。
 
 owner 默认填真实独立任务链接，例如 `codex://threads/实际ID`。
@@ -88,16 +93,24 @@ parent 和 depends_on 填卡片 ID；尚未建卡的外部条件在正文中说�
 一张卡可以涵盖多个仓库；多个独立任务并行时各自写子卡，父卡记录共同目标和集成验收。
 脚本只展示状态，不自动判定验收、解除依赖或完成父卡。
 
+## 完成、取消与重新打开
+
+- 标为 done 或 cancelled 时，将实际结束时间写入 closed_at，正文保留交付与验证证据或取消原因。
+- 结束后补充说明只更新 updated_at，保留原 closed_at。旧卡缺失或为 null 时，归档显示「未记录」并列在该组末尾，不根据 updated_at、文件日期或刷新时间猜测。
+- 重新打开时改回合适的未完成状态，清空 closed_at 并更新 updated_at；原有结束经过可留在正文。再次结束时记录本次结束时间。
+- 归档资格由 status 决定；closed_at 用于结束时间展示与排序，不自动改变状态或验收结果。
+
 ## 总览、触发和交接
 
-- 使用 apply_patch 写卡后，coordination_after_edit hook 刷新 OVERVIEW；它只识别上述卡片路径。
-  普通代码、TODO、CURRENT 和生成总览的编辑不会触发汇总。
+- 使用 apply_patch 写卡后，coordination_after_edit hook 同时刷新 OVERVIEW 和 ARCHIVE；它只识别上述卡片路径。
+  普通代码、TODO、CURRENT 和生成视图的编辑不会触发汇总。
 - hook 不分析自然人用户的提示语、不启用任务、不调用模型、不读取历史对话。
   启用意图由全局规则与 skill 处理，生效范围是当前工作。
 - Python、shell 或编辑器等其他方式写卡后，执行主 skill 给出的刷新入口。
   hook 不覆盖所有文件写入方式；新 hook 需要宿主加载并信任后才会自动执行。
-- 全局和项目 OVERVIEW 都由同一批卡片生成，显示活跃项和结束项数量。
-  结束项详情留在原卡，按需检索；不存在第二份需人工维护的进度表。
+- 全局和项目视图都由同一批卡片生成。OVERVIEW 显示未完成事项和结束项数量，并链接 ARCHIVE。
+  ARCHIVE 将已完成与已取消分组，按 closed_at 倒序显示结束时间、工作项链接、状态和项目；各组缺失时间的事项排在末尾。
+  总览与归档相互链接；跨项目事项进入所有相关项目的视图。详情留在原卡，不存在第二份需人工维护的进度表。
 - 刷新加锁串行执行并逐文件原子替换；自然人用户只改任务卡和必要的 CURRENT。
   CURRENT 是重点与约定，不是实时状态。
 - 卡片格式不完整或重复 ID 会阻止本次生成，报告问题而不输出不完整的绿色结果。
